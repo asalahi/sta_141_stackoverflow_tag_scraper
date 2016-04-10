@@ -1,0 +1,305 @@
+---
+title: "Web Scraping and Data Wrangling StackOverflow Tags"
+author: "Ali Salahi"
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+  word_document: default
+---
+
+
+###Preliminary
+
+
+This project was particularly counter-intuitive; it was really easy to think you were pulling all the information you wanted with your xpaths, then 5 pages later all your top-level functions are giving errors. Firstly, I will summate my xpaths I used to pull the information requested (poster, time, title, reputation, views, answers, score, url, id, and tags). All, except for Username, Reputation, and Tags were rather straight-forward and did not require too much iteration. I wrote a mini-function for each piece of information requested per post per page (I used 50 posts/page).  
+
+My xpath writing ability was partially improved when a Ph.D. candidate in the Stats Department showed how to utilize developer tools on Firefox to allow us to jump to that part of the parsed html, and this is how I selected which text or attribute to pull from the html and subsequently how to write the xpath. 
+
+I then attempted to answer a few questions and run some visualizations with the data I scraped.
+
+My code, in its entirety, is attached at the bottom of this report under 'Code Appendix'.
+
+
+###XML's and XPaths
+
+
+For time, I used, `"//div[@class = 'user-action-time']/span/@title"`, this was rather direct, and well formatted, it was especially to be able to pull the attribute directly. 
+
+For the post title, I used, `"//div[@class = 'summary']/h3/a[@class = 'question-hyperlink']/text()"`. This allowed me to directly pull the text hyperlinked to the question page. 
+
+For views, I used, `"//div[@class = 'statscontainer']/div[starts-with(@class, 'views')]/@title"`; once again I was able to directly pull the attribute, I prefered to pull attributes rather than text, I found them to be less fussy and have less unwanted friends, I also decided to strsplit the pulled title for " views" in order to end up with a raw number. 
+
+For answers, I used, `"//div[@class = 'stats']/div/strong/text()"`, which pulled from a direct path under the stats class div. 
+
+For score, I used, `"//div[@class = 'votes']/span/strong/text()"`, which was very straight-forward in that it pulled the text directly from a specified descendent of the div class votes node.
+
+For URL, I used, `"//a[@class = 'question-hyperlink']/@href"`, which pulls a hyperlink, specifically to the question in hand, I then used getRelativeURL to get the full link.
+
+For id, I used, `"//div[@class = 'question-summary']/@id"`, this pulled a long character string which involved a bunch of unwanted information (that wasn't the id). I decided to strsplit by "-" and unlist the strings, they were formatted consistently in that every 3rd element was the id portion I desired, so I sequenced the unlisted and split vector. I feel this methodology, although functionally sound, is not as robust as would have been desired. It was made clear regex would not be needed (I had to strsplit), and I believe there was a more efficient way to get the information I wanted directly from the xpath.
+
+For username, I originally used the too good to be true hyperlinked text under the div user-info. After getting all my functions to work, and my top-level functions, I found after a certain amount of pages I was getting errors. I heard about anonymous users on piazza, so I had an intuition as to what was going on and went to check. I found that the 'anonymous' users, weren't too anonymous, some of them had non-trivial usernames, and I wanted to pull their information. The username text was still being displayed in the html, and It was in the same area the others were. I eventually used the xpath `"//div[@class = 'user-details']"` and used xmlValue on the nodes I got, returned to me was a really ugly character string that did however include anonymous usernames (those not hyperlinked to a user page). I strsplit this character string, luckily in the anon and regular cases the username was always at the beginning of the string. Further, I noticed after strspliting that the anonymous users had 1 element after the split, the username, however the actual users had some other split elements all greater than 1. I utilized this observation in pulling my reputations, because I knew they would similarly be affected by the anonymous users (aside from not being hyperlinked, they did not have any reputation). I indexed the rows in which the length was below one (after the split) and used my trivial reputation xpath `"//div[@class = 'user-details']//span[@class = 'reputation-score']/text()"`. Then I inserted the string into the index, and inserted NAs for those whose lengths weren't greater than zero. 
+
+For tags, I used, `"//div[starts-with(@class,'tags')]"`, from this I used xmlSApply to return values and to trim. This gave me all the tags for a given post in a character string seperated by spaces, I was able to later use this to unlist and strsplit and have a master list of tags.
+
+My top level functions are in my code, and work beautifully.
+
+
+###What is the distribution of the number of questions each person answered?
+
+
+For each number of questions answered, I was able to get a count of how many users answered that many questions. Well over 1000 people answered atleast 1 question, and very few power users answered more than 200. To give a clearer view, I honed in on the action-packed part of my plot.
+
+```{r,echo=FALSE}
+load("C:/Users/Ali/Downloads/rQAs (1).rda")
+answers <- rQAs[ which( rQAs$type == "answer"),]
+answers.by.user <- as.numeric( table( answers$user))
+plot( table(answers.by.user), type = "h", 
+      main = "Dist. of Questions Answered by User",
+      xlab = "Number of Questions Answered", 
+      ylab = "Amount of Users",
+      ylim = range(0,20), 
+      xlim = range(1,150))
+```
+
+We can see the shape, and how it tapers off.
+
+
+###What are the most common tags?
+
+
+For this problem, I was able to count up how many times each tag was used in a question (a tag couldn't be used more than once in a post). I excluded r, since it was used in every post, and I charted the top 24 tags, it is presented:
+
+
+```{r,echo=FALSE,cache=TRUE,message=FALSE,warning=FALSE}
+library(XML)
+library(RCurl)
+html <- htmlParse("http://stackoverflow.com/questions/tagged/r?sort=newest&pagesize=50")
+tags <- function( html){
+  path = "//div[starts-with(@class,'tags')]"
+  nodes <- getNodeSet( html, path)
+  return( xmlSApply( nodes, xmlValue, trim = TRUE))}
+getNextURL = function( html){
+  nxt = unique(unlist(getNodeSet(html, "//a[@rel = 'next']/@href")))
+  return( getRelativeURL(nxt, docName(html)))}
+tags.4.days =
+  function( u ,pages)
+  {
+    ans = NULL
+    page = 1
+    while(TRUE) {
+      tags = tags(u)
+      ans = c(ans,tags)
+      u = getNextURL(u)
+      u = htmlParse(u)
+      page = 1 + page
+      if(length(u) == 0 | page > pages)
+        break
+    }
+    
+    return(ans)
+  }
+master.tags <- tags.4.days(html,50)
+totques <- length(master.tags)
+master.tags.raw <- unlist( strsplit(master.tags, " "))
+com.tags <- head( sort( table( master.tags.raw), decreasing = TRUE), 25)
+dotchart(com.tags[2:25], main = "Most Common Tags", xlab = "Frequency of Questions with Tag")
+```
+
+I used a shortcut and only sampled the first 2500 posts for tags, to save on computer intensity.
+
+###How many questions involve XML, HTML or Web Scraping?
+
+I found 1.28% of the posts, had a tag that was either XML, HTML, or Web Scraping. 
+
+*************
+
+#Code Appendix
+```
+library( XML)
+library( RCurl)
+
+html <- htmlParse("http://stackoverflow.com/questions/tagged/r?sort=newest&pagesize=50")
+
+#usernames
+usernames <- function( html){
+  path<-"//div[@class = 'user-details']"
+  nodes <- getNodeSet( html, path)
+  return( sapply( strsplit( xmlSApply(nodes, xmlValue, trim = TRUE), "\r\n"), `[[`, 1))}
+
+#when
+timestmps <- function( html){
+  path <- "//div[@class = 'user-action-time']/span/@title"
+  nodes <- getNodeSet( html, path)
+  times <- unlist(nodes)
+  names( times) = NULL
+  return( times)}
+
+#title
+titles <- function( html){
+  path <- "//div[@class = 'summary']/h3/a[@class = 'question-hyperlink']/text()"
+  nodes <- getNodeSet( html, path)
+  return( xmlSApply( nodes, xmlValue))}
+
+reps <- function( html){
+  path <- "//div[@class = 'user-details']//span[@class = 'reputation-score']/text()"
+  nodes <- getNodeSet( html, path)
+  interject <- xmlSApply( nodes, xmlValue)
+  path2 <- "//div[@class = 'user-details']"
+  nodes2 <- getNodeSet(html, path2)
+  ref <- sapply( strsplit( xmlSApply(nodes2, xmlValue, trim = TRUE), "\r\n"), function(p) length(p)>1)
+  ref[which(ref == TRUE)] <- interject
+  ref[which(ref == "FALSE")] <- NA
+  return(ref)}
+
+#views
+views <- function( html){
+  path <- "//div[@class = 'statscontainer']/div[starts-with(@class, 'views')]/@title"
+  nodes <- getNodeSet( html, path)
+  views <- unlist( strsplit( unlist (nodes), " views"))
+  names( views) = NULL
+  return( views)}
+
+#answers
+answers <- function( html){
+  path <- "//div[@class = 'stats']/div/strong/text()"
+  nodes <- getNodeSet( html, path)
+  return( xmlSApply( nodes, xmlValue))}
+
+#votes
+votes <- function( html){
+  path <- "//div[@class = 'votes']/span/strong/text()"
+  nodes <- getNodeSet( html, path)
+  return( xmlSApply( nodes, xmlValue))}
+
+#hyperlink
+links <- function( html){
+  path <- "//a[@class = 'question-hyperlink']/@href"
+  nodes <- getNodeSet( html, path)
+  links <- unlist( nodes)
+  links <- getRelativeURL( links, docName( html))
+  names( links)= NULL
+  return( links)}
+
+#id
+id <- function( html){
+  path <- "//div[@class = 'question-summary']/@id"
+  nodes <- getNodeSet( html, path)
+  idz <- unlist(strsplit(unlist(nodes), "-"))[seq(3,3*50,3)]
+  names(idz) = NULL
+  return( idz)}
+
+#nextURL
+getNextURL = function( html){
+  nxt = unique(unlist(getNodeSet(html, "//a[@rel = 'next']/@href")))
+  return( getRelativeURL(nxt, docName(html)))}
+
+#tags
+tags <- function( html){
+  path = "//div[starts-with(@class,'tags')]"
+  nodes <- getNodeSet( html, path)
+  return( xmlSApply( nodes, xmlValue, trim = TRUE))}
+
+#scrape a page
+pagescrape = function( html){
+  data.frame(
+    id = id( html),
+    date = timestmps( html),
+    tags = tags( html),
+    title = titles( html),
+    url = links( html),
+    views = views( html),
+    votes = votes( html),
+    answers = answers( html),
+    user = usernames( html),
+    reputation = reps( html))}
+
+a <- pagescrape(html)
+
+#scrape all tha pagez
+ayyyylmao =
+  function( tag ,pages)
+  {
+    ans = NULL
+    page = 1
+    tag <- sub( " ", "-", tag)
+    beg <- "http://stackoverflow.com/questions/tagged/"
+    end <- "?sort=newest&pagesize=50"
+    u <- paste( beg, tag, end, sep="")
+    u <- htmlParse( u)
+    while(TRUE) {
+      d = pagescrape(u)
+      ans = rbind(ans,d)
+      u = getNextURL(u)
+      u = htmlParse(u)
+      page = 1 + page
+      if(length(u) == 0 | page > pages)
+        break
+    }
+    
+    return(ans)
+  }
+
+
+#FIRST ARGUMENT MUST BE A CHARACTER // SPACES ONLY IN BETWEEN WORDS ex: 'string concatenation'
+ayyyylmao( "r", 3)
+
+#Distribution of Questions answered
+
+load("C:/Users/Ali/Downloads/rQAs (1).rda")
+
+answers <- rQAs[ which( rQAs$type == "answer"),]
+answers.by.user <- as.numeric( table( answers$user))
+
+plot( table(answers.by.user), type = "h", 
+      xlab = "Number of Questions Answered", 
+      main = "Dist. of Questions Answered by User",
+      ylab = "Amount of Users")
+plot( table(answers.by.user), type = "h", 
+      main = "Dist. of Questions Answered by User",
+      xlab = "Number of Questions Answered", 
+      ylab = "Amount of Users",
+      ylim = range(0,20), 
+      xlim = range(1,150))
+
+#What are the most common tags?
+
+tags.4.days =
+  function( u ,pages)
+  {
+    ans = NULL
+    page = 1
+    while(TRUE) {
+      tags = tags(u)
+      ans = c(ans,tags)
+      u = getNextURL(u)
+      u = htmlParse(u)
+      page = 1 + page
+      if(length(u) == 0 | page > pages)
+        break
+    }
+    
+    return(ans)
+  }
+
+master.tags <- tags.4.days(html,50)
+totques <- length(master.tags)
+master.tags.raw <- unlist( strsplit(master.tags, " "))
+com.tags <- head( sort( table( master.tags), decreasing = TRUE), 25)
+dotchart(com.tags[2:25], main = "Most Common Tags", xlab = "Frequency of Questions with Tag")
+
+#How many questions involve XML, HTML, or Web Scraping?
+
+length(grep("xml|html|web-scraping", master.tags, ignore.case=TRUE))/2500
+
+#sad attempt to try and pull text and grep through
+xmlSApply(rQAs$text, xmlValue)
+xmlSApply( htmlParse(rQAs[1,6]), xmlValue)
+xmlSApply( getNodeSet(xmlParse(rQAs[1,6]), "//text()"), xmlValue)
+q.ind <- which(rQAs$type=="question")
+involve <- sapply(1:10004, function(q){
+  text <- xmlSApply( getNodeSet(xmlParse(rQAs[q.ind[q],6]), "//text()"), xmlValue)
+  result <- grep("xml|html|web([ -])?scraping", text, ignore.case=TRUE)
+  return(result>0)
+})
+```
